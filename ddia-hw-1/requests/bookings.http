@@ -1,0 +1,66 @@
+@baseUrl = http://localhost:8080
+
+### Health — 200
+GET {{baseUrl}}/actuator/health
+
+### Создать бронь — 201. Случайное имя комнаты позволяет повторять сценарий.
+POST {{baseUrl}}/bookings
+Content-Type: application/json
+
+{
+  "room": "room-{{$uuid}}",
+  "date": "2026-10-23",
+  "hour": 14
+}
+
+> {%
+client.test("Created", function () { client.assert(response.status === 201); });
+client.global.set("bookingId", response.body.id);
+client.global.set("room", response.body.room);
+%}
+
+### Получить созданную бронь — 200
+GET {{baseUrl}}/bookings/{{bookingId}}
+
+### Занять тот же слот — 409
+POST {{baseUrl}}/bookings
+Content-Type: application/json
+
+{
+  "room": "{{room}}",
+  "date": "2026-10-23",
+  "hour": 14
+}
+
+### Перенести бронь на 15:00 — 200
+PUT {{baseUrl}}/bookings/{{bookingId}}
+Content-Type: application/json
+
+{
+  "room": "{{room}}",
+  "date": "2026-10-23",
+  "hour": 15
+}
+
+### Некорректный запрос — 400
+POST {{baseUrl}}/bookings
+Content-Type: application/json
+
+{
+  "room": "A",
+  "date": "2026-10-23",
+  "hour": 24
+}
+
+### Отсутствующая бронь — 404
+GET {{baseUrl}}/bookings/9223372036854775807
+
+### Изменить отсутствующую бронь — 404
+PUT {{baseUrl}}/bookings/9223372036854775807
+Content-Type: application/json
+
+{
+  "room": "A",
+  "date": "2026-10-23",
+  "hour": 14
+}
