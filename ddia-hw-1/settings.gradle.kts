@@ -3,3 +3,6 @@ plugins {
 }
 
 rootProject.name = "booking-service"
+
+include("http-metrics-spring-boot-starter")
+include("dashboard-generator")

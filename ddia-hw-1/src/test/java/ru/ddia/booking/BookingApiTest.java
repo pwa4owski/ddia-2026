@@ -12,7 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+        "metrics.pod=test-pod-7", "metrics.datacenter=test-dc", "metrics.deployment=test-deployment"})
 class BookingApiTest {
     @Value("${local.server.port}")
     private int port;
@@ -47,6 +48,34 @@ class BookingApiTest {
     }
 
     @Test
+    void exportsRequestMetricsWithRouteTemplatesAndStatuses() throws Exception {
+        String before = metrics();
+        String room = UUID.randomUUID().toString();
+        var first = send("POST", "/bookings", body(room, 14));
+        var second = send("POST", "/bookings", body(room, 15));
+        assertEquals(201, first.statusCode());
+        assertEquals(201, second.statusCode());
+        String firstLocation = first.headers().firstValue("Location").orElseThrow();
+        String secondLocation = second.headers().firstValue("Location").orElseThrow();
+        assertEquals(200, send("GET", firstLocation, null).statusCode());
+        assertEquals(200, send("GET", secondLocation, null).statusCode());
+        assertEquals(404, send("GET", "/bookings/9223372036854775807", null).statusCode());
+
+        String after = metrics();
+        assertEquals(2, count(after, "GET", "/bookings/{id}", 200) - count(before, "GET", "/bookings/{id}", 200));
+        assertEquals(1, count(after, "GET", "/bookings/{id}", 404) - count(before, "GET", "/bookings/{id}", 404));
+
+        assertTrue(after.lines().anyMatch(line -> line.startsWith("bookings_request_seconds_bucket{")
+                && !line.contains("le=\"+Inf\"")));
+        assertTrue(after.lines().filter(line -> line.startsWith("bookings_request_seconds"))
+                .allMatch(line -> line.contains("pod=\"test-pod-7\"")
+                        && line.contains("datacenter=\"test-dc\"")
+                        && line.contains("deployment=\"test-deployment\"")));
+        assertFalse(after.contains("route=\"" + firstLocation + "\""));
+        assertFalse(after.contains("route=\"" + secondLocation + "\""));
+    }
+
+    @Test
     void concurrentRequestsCannotDoubleBook() {
         String payload = body(UUID.randomUUID().toString(), 14);
         var first = client.sendAsync(request("POST", "/bookings", payload), HttpResponse.BodyHandlers.ofString());
@@ -54,6 +83,22 @@ class BookingApiTest {
         CompletableFuture.allOf(first, second).join();
         assertEquals(java.util.Set.of(201, 409),
                 java.util.Set.of(first.join().statusCode(), second.join().statusCode()));
+    }
+
+    private String metrics() throws Exception {
+        var response = send("GET", "/actuator/prometheus", null);
+        assertEquals(200, response.statusCode());
+        return response.body();
+    }
+
+    private double count(String exposition, String method, String route, int status) {
+        return exposition.lines()
+                .filter(line -> line.startsWith("bookings_request_seconds_count{")
+                        && line.contains("method=\"" + method + "\"")
+                        && line.contains("route=\"" + route + "\"")
+                        && line.contains("status=\"" + status + "\""))
+                .mapToDouble(line -> Double.parseDouble(line.substring(line.lastIndexOf(' ') + 1)))
+                .findFirst().orElse(0);
     }
 
     private String body(String room, int hour) {

@@ -1,7 +1,12 @@
 @baseUrl = http://localhost:8080
+@vmUrl = http://localhost:8428
+@grafanaUrl = http://localhost:3000
 
 ### Health — 200
 GET {{baseUrl}}/actuator/health
+
+### Зарегистрированные маршруты — 200. HTTP-методы и шаблоны доступны до первых запросов. Эту ручку вызывает CLI-генератор.
+GET {{baseUrl}}/actuator/mappings
 
 ### Создать бронь — 201. Случайное имя комнаты позволяет повторять сценарий.
 POST {{baseUrl}}/bookings
@@ -21,6 +26,9 @@ client.global.set("room", response.body.room);
 
 ### Получить созданную бронь — 200
 GET {{baseUrl}}/bookings/{{bookingId}}
+
+### Метрики — 200. Ответ содержит bookings_request_seconds_bucket, _count и _sum.
+GET {{baseUrl}}/actuator/prometheus
 
 ### Занять тот же слот — 409
 POST {{baseUrl}}/bookings
@@ -64,3 +72,9 @@ Content-Type: application/json
   "date": "2026-10-23",
   "hour": 14
 }
+
+### VictoriaMetrics скрейпит приложение — ожидается value со значением "1".
+GET {{vmUrl}}/api/v1/query?query=up%7Bjob%3D%22booking-service%22%7D
+
+### Grafana health — 200.
+GET {{grafanaUrl}}/api/health

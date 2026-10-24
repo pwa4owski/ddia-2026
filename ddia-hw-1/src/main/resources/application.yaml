@@ -12,8 +12,15 @@ spring:
 server:
   port: ${PORT:8080}
 
+metrics:
+  name: bookings.request
+
 management:
+  metrics:
+    distribution:
+      percentiles-histogram:
+        bookings.request: true
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,prometheus,mappings
