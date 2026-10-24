@@ -1,0 +1,144 @@
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      METRICS_POD: "${METRICS_POD:-1}"
+      METRICS_DATACENTER: "${METRICS_DATACENTER:-local}"
+      METRICS_DEPLOYMENT: "${METRICS_DEPLOYMENT:-booking-dev}"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=3", "--output-document=/dev/null", "http://127.0.0.1:8080/actuator/health"]
+      interval: 5s
+      timeout: 4s
+      start_period: 30s
+      retries: 12
+    stop_grace_period: 30s
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.154.0
+    command:
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=7d
+      - -promscrape.config=/etc/victoriametrics/scrape.yaml
+    ports:
+      - "127.0.0.1:${VICTORIAMETRICS_PORT:-8428}:8428"
+    volumes:
+      - victoria-data:/victoria-metrics-data
+      - ./infra/victoriametrics/scrape.yaml:/etc/victoriametrics/scrape.yaml:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=3", "--output-document=/dev/null", "http://127.0.0.1:8428/health"]
+      interval: 5s
+      timeout: 4s
+      start_period: 10s
+      retries: 12
+
+  grafana-credentials:
+    image: python:3.13.9-alpine
+    command: ["python", "/setup/grafana_setup.py", "credentials"]
+    volumes:
+      - ./infra/grafana/setup.py:/setup/grafana_setup.py:ro
+      - grafana-admin:/run/grafana-admin
+    restart: "no"
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: bootstrap-admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/grafana-admin/password
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - grafana-admin:/run/grafana-admin:ro
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      grafana-credentials:
+        condition: service_completed_successfully
+      victoriametrics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=3", "--output-document=/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 4s
+      start_period: 30s
+      retries: 12
+
+  grafana-bootstrap:
+    image: python:3.13.9-alpine
+    command: ["python", "/setup/grafana_setup.py", "bootstrap"]
+    environment:
+      GRAFANA_URL: http://grafana:3000
+    volumes:
+      - ./infra/grafana/setup.py:/setup/grafana_setup.py:ro
+      - grafana-admin:/run/grafana-admin:ro
+      - grafana-generator-token:/run/grafana-token
+    depends_on:
+      grafana:
+        condition: service_healthy
+    restart: "no"
+
+  dashboard-generator:
+    build:
+      context: .
+      target: generator
+    command:
+      - --app-url
+      - http://app:8080
+      - --grafana-url
+      - http://grafana:3000
+      - --token-file
+      - /run/grafana-token/token
+      - --datasource-uid
+      - victoriametrics
+    volumes:
+      - grafana-generator-token:/run/grafana-token:ro
+    depends_on:
+      app:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+      grafana-bootstrap:
+        condition: service_completed_successfully
+    restart: "no"
+
+  load-generator:
+    image: grafana/k6:2.3.0
+    command: ["run", "--quiet", "/scripts/bookings.js"]
+    environment:
+      BASE_URL: http://app:8080
+      LOAD_TARGET_RPS: "${LOAD_TARGET_RPS:-100}"
+      LOAD_RAMP_DURATION: "${LOAD_RAMP_DURATION:-5m}"
+      LOAD_HOLD_DURATION: "${LOAD_HOLD_DURATION:-10m}"
+      LOAD_ERROR_PERCENT: "${LOAD_ERROR_PERCENT:-15}"
+      K6_NO_USAGE_REPORT: "true"
+    volumes:
+      - ./load:/scripts:ro
+    depends_on:
+      app:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+      dashboard-generator:
+        condition: service_completed_successfully
+    stop_grace_period: 10s
+    restart: "no"
+
+volumes:
+  victoria-data:
+  grafana-data:
+  grafana-admin:
+  grafana-generator-token:
