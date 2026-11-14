@@ -1,0 +1,10 @@
+package ru.ddia.api;
+
+public enum FailureReason {
+    ATTEMPTS_EXHAUSTED,
+    FAST_ERRORS_EXHAUSTED,
+    FAILURES_EXHAUSTED,
+    TIMEOUTS_EXHAUSTED,
+    DEADLINE_EXCEEDED,
+    NO_HEALTHY_ENDPOINTS
+}
